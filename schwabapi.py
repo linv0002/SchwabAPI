@@ -10,7 +10,7 @@ import mplfinance as mpf
 import pandas as pd
 
 def create_client(app_key, app_secret, callback_url):
-    return schwabdev.Client(app_key, app_secret)
+    return schwabdev.Client(app_key, app_secret, callback_url, verbose=True)
 
 def get_linked_accounts(client):
     return client.account_linked().json()
@@ -18,15 +18,47 @@ def get_linked_accounts(client):
 def get_account_details(client, account_hash):
     return client.account_details(account_hash).json()
 
+
+def print_account_info(account_details):
+    account_info = account_details.get("securitiesAccount", {})
+
+    # Type
+    account_type = account_info.get('type', 'N/A')
+    print(f"Type: {account_type}")
+
+    # Current Balances
+    current_balances = account_info.get("currentBalances", {})
+    cash_balance = current_balances.get("cashBalance", 'N/A')
+    liquidation_value = current_balances.get("liquidationValue", 'N/A')
+    buying_power = current_balances.get("buyingPower", 'N/A')
+    margin_balance = current_balances.get("marginBalance", 'N/A')
+
+    print(f"Cash: {cash_balance}")
+    print(f"Liquidation Value: {liquidation_value}")
+    print(f"Buying Power: {buying_power}")
+    print(f"Margin Balance: {margin_balance}")
+
 def get_account_positions(client, account_hash):
     account_details =  client.account_details(account_hash, fields='positions').json()
     return account_details['securitiesAccount']['positions']
 
+
+def print_account_positions(main_positions):
+    for position in main_positions:
+        print(f"Symbol: {position['instrument']['symbol']}, Quantity: {position['longQuantity']}, Market Value: {position['marketValue']}")
+
 def get_account_orders(client, account_hash, start_date, end_date):
     return client.account_orders(account_hash, start_date, end_date).json()
 
+
+def print_account_orders(orders):
+    for order in orders:
+        print(f"Symbol: {order['orderLegCollection'][0]['instrument']['symbol']}, Quantity: {order['orderLegCollection'][0]['quantity']}, Price: {order['price']}, Order Type: {order['orderType']}")
+        print(f"Order ID: {order['orderId']}, Status: {order['status']}, Filled Quantity: {order['filledQuantity']}, Remaining Quantity: {order['remainingQuantity']}")
+        print("--------------------------------------------------")
+
 def place_order(client, account_hash, order):
-    resp = client.place_order(account_hash, order).json()
+    resp = client.order_place(account_hash, order)
     order_id = resp.headers.get('location', '/').split('/')[-1]
     return resp, order_id
 
@@ -34,10 +66,12 @@ def get_order_details(client, account_hash, order_id):
     return client.order_details(account_hash, order_id).json()
 
 def cancel_order(client, account_hash, order_id):
-    return client.cancel_order(account_hash, order_id).json()
+    return client.order_cancel(account_hash, order_id)
 
 def replace_order(client, account_hash, order_id, order):
-    return client.replace_order(account_hash, order_id, order).json()
+    resp = client.order_replace(account_hash, order_id, order)
+    order_id = resp.headers.get('location', '/').split('/')[-1]
+    return resp, order_id
 
 def get_transactions(client, account_hash, start_date, end_date):
     return client.account_transactions(account_hash, start_date, end_date).json()
@@ -47,6 +81,21 @@ def get_user_preferences(client):
 
 def get_quotes(client, symbols):
     return client.quotes(symbols).json()
+
+def print_quotes(quotes):
+    for key, quote_data in quotes.items():
+        quote_info = quote_data.get('quote', {})
+        symbol = key
+        price = quote_info.get('lastPrice', 'N/A')
+        bid_price = quote_info.get('bidPrice', 'N/A')
+        ask_price = quote_info.get('askPrice', 'N/A')
+        pct_change = quote_info.get('netPercentChange', 'N/A')
+        volume = quote_info.get('totalVolume', 'N/A')
+        high = quote_info.get('highPrice', 'N/A')
+        low = quote_info.get('lowPrice', 'N/A')
+
+        print(f"Symbol: {symbol}, Price: {price}, Bid Price: {bid_price}, Ask Price: {ask_price}, "
+              f"pct_change: {pct_change}, volume: {volume}, high: {high}, low: {low}")
 
 def get_single_quote(client, symbol):
     return client.quote(symbol).json()
@@ -61,7 +110,6 @@ def find_closest_strike(strikes):
     return float(closest_strike)
 
 
-# Function to filter strikes by selecting the closest strikes around the delta = 0.5 strike
 def print_options_side_by_side(options_chain, num_strikes=None, exp_dates=None):
     # Extract call and put expiration maps
     call_exp_map = options_chain.get('callExpDateMap', {})
@@ -73,6 +121,10 @@ def print_options_side_by_side(options_chain, num_strikes=None, exp_dates=None):
 
     print(f"Available call expiration dates in the data: {available_call_dates}")
     print(f"Available put expiration dates in the data: {available_put_dates}")
+
+    # If no expiration dates are provided, default to using all available expiration dates
+    if exp_dates is None:
+        exp_dates = available_call_dates
 
     # Create a mapping from stripped dates to full dates
     stripped_call_dates = {date.split(':')[0]: date for date in available_call_dates}
@@ -86,161 +138,162 @@ def print_options_side_by_side(options_chain, num_strikes=None, exp_dates=None):
 
         if call_key and put_key:
             print(
-                f"\nExpiration Date: {call_key} (Days to Expiration: {call_exp_map[call_key]['12.0'][0]['daysToExpiration']})")
+                f"\nExpiration Date: {call_key} (Days to Expiration: {call_exp_map[call_key][list(call_exp_map[call_key].keys())[0]][0]['daysToExpiration']})")
+
+            # Get the common strikes available in both calls and puts
             strikes = sorted(set(call_exp_map[call_key].keys()) & set(put_exp_map[put_key].keys()), key=float)
 
+            # Limit the number of strikes if required
             if num_strikes:
-                strikes = strikes[:num_strikes]
+                strikes = strikes[:int(num_strikes)]
 
             for strike in strikes:
-                call_option = call_exp_map[call_key][strike][0]
-                put_option = put_exp_map[put_key][strike][0]
+                if strike in call_exp_map[call_key] and strike in put_exp_map[put_key]:
+                    call_option = call_exp_map[call_key][strike][0]
+                    put_option = put_exp_map[put_key][strike][0]
 
-                print(f"Strike Price: {strike}")
-                print(
-                    f"Call: Bid = {call_option['bid']}, Ask = {call_option['ask']}, Volume = {call_option.get('totalVolume', 0)}, Open Interest = {call_option['openInterest']}, IV = {call_option['volatility']}, Delta = {call_option['delta']}, Theta = {call_option['theta']}")
-                print(
-                    f"Put:  Bid = {put_option['bid']}, Ask = {put_option['ask']}, Volume = {put_option.get('totalVolume', 0)}, Open Interest = {put_option['openInterest']}, IV = {put_option['volatility']}, Delta = {put_option['delta']}, Theta = {put_option['theta']}")
-                print("--------------------------------------------------")
-
+                    print(f"Strike Price: {strike}")
+                    print(
+                        f"Call: Bid = {call_option['bid']}, Ask = {call_option['ask']}, Volume = {call_option.get('totalVolume', 0)}, Open Interest = {call_option['openInterest']}, IV = {call_option['volatility']}, Delta = {call_option['delta']}, Theta = {call_option['theta']}")
+                    print(
+                        f"Put:  Bid = {put_option['bid']}, Ask = {put_option['ask']}, Volume = {put_option.get('totalVolume', 0)}, Open Interest = {put_option['openInterest']}, IV = {put_option['volatility']}, Delta = {put_option['delta']}, Theta = {put_option['theta']}")
+                    print("--------------------------------------------------")
+                else:
+                    print(f"Strike {strike} is missing in one of the options maps (calls or puts). Skipping.")
         else:
             print(f"\nNo options found for the specified expiration date: {exp_date}.")
+
 
 def print_expiration_summary(options_chain):
     call_exp_map = options_chain.get('callExpDateMap', {})
     put_exp_map = options_chain.get('putExpDateMap', {})
 
     print("Summary of Expiration Dates:")
+
+    # Ensure there are call expirations to avoid errors
+    if not call_exp_map:
+        print("No call expiration dates available.")
+        return
+
     for exp_date in call_exp_map.keys():
         num_strikes = len(call_exp_map[exp_date])
-        days_to_exp = list(call_exp_map[exp_date].values())[0][0]['daysToExpiration']
+        days_to_exp = list(call_exp_map[exp_date].values())[0][0].get('daysToExpiration', 'N/A')
         print(f"Expiration Date: {exp_date} (Days to Expiration: {days_to_exp}), Number of Strikes: {num_strikes}")
     print("--------------------------------------------------")
 
-def print_iv_extremes(options_chain, exp_dates):
+
+def print_iv_extremes(options_chain, exp_dates=None):
     call_exp_map = options_chain.get('callExpDateMap', {})
     put_exp_map = options_chain.get('putExpDateMap', {})
 
-    # Extract available expiration dates
-    available_call_dates = list(call_exp_map.keys())
-    available_put_dates = list(put_exp_map.keys())
-
-    # Create a mapping from stripped dates to full dates
-    stripped_call_dates = {date.split(':')[0]: date for date in available_call_dates}
-    stripped_put_dates = {date.split(':')[0]: date for date in available_put_dates}
+    # Default to all available expiration dates if none are provided
+    if exp_dates is None:
+        exp_dates = list(call_exp_map.keys())
 
     for exp_date in exp_dates:
-        stripped_exp_date = exp_date.split(':')[0]
-        call_key = stripped_call_dates.get(stripped_exp_date)
-        put_key = stripped_put_dates.get(stripped_exp_date)
+        call_key = call_exp_map.get(exp_date)
+        if call_key:
+            ivs = [(strike, call_option[0]['volatility']) for strike, call_option in call_key.items() if call_option]
 
-        if call_key and put_key:
-            ivs = []
-            for strike in call_exp_map[call_key].keys():
-                call_option = call_exp_map[call_key][strike][0]
-                ivs.append((strike, call_option['volatility']))
+            if ivs:
+                highest_iv = max(ivs, key=lambda x: x[1])
+                lowest_iv = min(ivs, key=lambda x: x[1])
 
-            highest_iv = max(ivs, key=lambda x: x[1])
-            lowest_iv = min(ivs, key=lambda x: x[1])
+                print(f"Expiration Date: {exp_date}")
+                print(f"  Highest IV: Strike = {highest_iv[0]}, IV = {highest_iv[1]}")
+                print(f"  Lowest IV: Strike = {lowest_iv[0]}, IV = {lowest_iv[1]}")
+                print("--------------------------------------------------")
+            else:
+                print(f"No strikes found for expiration date: {exp_date}")
 
-            print(f"Expiration Date: {call_key}")
-            print(f"  Highest IV: Strike = {highest_iv[0]}, IV = {highest_iv[1]}")
-            print(f"  Lowest IV: Strike = {lowest_iv[0]}, IV = {lowest_iv[1]}")
-            print("--------------------------------------------------")
 
-def print_volume_oi_heatmap(options_chain, exp_dates):
+def print_volume_oi_heatmap(options_chain, exp_dates=None):
     call_exp_map = options_chain.get('callExpDateMap', {})
     put_exp_map = options_chain.get('putExpDateMap', {})
 
-    # Extract available expiration dates
-    available_call_dates = list(call_exp_map.keys())
-    available_put_dates = list(put_exp_map.keys())
-
-    # Create a mapping from stripped dates to full dates
-    stripped_call_dates = {date.split(':')[0]: date for date in available_call_dates}
-    stripped_put_dates = {date.split(':')[0]: date for date in available_put_dates}
+    # Default to all available expiration dates if none are provided
+    if exp_dates is None:
+        exp_dates = list(call_exp_map.keys())
 
     for exp_date in exp_dates:
-        stripped_exp_date = exp_date.split(':')[0]
-        call_key = stripped_call_dates.get(stripped_exp_date)
-        put_key = stripped_put_dates.get(stripped_exp_date)
+        call_key = call_exp_map.get(exp_date)
+        put_key = put_exp_map.get(exp_date)
 
         if call_key and put_key:
-            print(f"Expiration Date: {call_key}")
+            print(f"Expiration Date: {exp_date}")
             print("Strike Price | Call Volume | Put Volume | Call Open Interest | Put Open Interest")
-            for strike in call_exp_map[call_key].keys():
-                call_option = call_exp_map[call_key][strike][0]
-                put_option = put_exp_map[put_key][strike][0]
+            for strike in call_key.keys():
+                if strike in put_key:
+                    call_option = call_key[strike][0]
+                    put_option = put_key[strike][0]
 
-                print(f"{strike} | {call_option.get('totalVolume', 0)} | {put_option.get('totalVolume', 0)} | {call_option['openInterest']} | {put_option['openInterest']}")
+                    print(f"{strike} | {call_option.get('totalVolume', 0)} | {put_option.get('totalVolume', 0)} "
+                          f"| {call_option['openInterest']} | {put_option['openInterest']}")
             print("--------------------------------------------------")
+        else:
+            print(f"No options found for the expiration date: {exp_date}.")
 
-def print_delta_theta_analysis(options_chain, exp_dates):
+
+def print_delta_theta_analysis(options_chain, exp_dates=None):
     call_exp_map = options_chain.get('callExpDateMap', {})
     put_exp_map = options_chain.get('putExpDateMap', {})
 
-    # Extract available expiration dates
-    available_call_dates = list(call_exp_map.keys())
-    available_put_dates = list(put_exp_map.keys())
-
-    # Create a mapping from stripped dates to full dates
-    stripped_call_dates = {date.split(':')[0]: date for date in available_call_dates}
-    stripped_put_dates = {date.split(':')[0]: date for date in available_put_dates}
+    # Default to all available expiration dates if none are provided
+    if exp_dates is None:
+        exp_dates = list(call_exp_map.keys())
 
     for exp_date in exp_dates:
-        stripped_exp_date = exp_date.split(':')[0]
-        call_key = stripped_call_dates.get(stripped_exp_date)
-        put_key = stripped_put_dates.get(stripped_exp_date)
+        call_key = call_exp_map.get(exp_date)
+        put_key = put_exp_map.get(exp_date)
 
         if call_key and put_key:
             deltas = []
             thetas = []
-            for strike in call_exp_map[call_key].keys():
-                call_option = call_exp_map[call_key][strike][0]
-                deltas.append((strike, call_option['delta']))
-                thetas.append((strike, call_option['theta']))
+            for strike in call_key.keys():
+                if strike in put_key:
+                    call_option = call_key[strike][0]
+                    deltas.append((strike, call_option['delta']))
+                    thetas.append((strike, call_option['theta']))
 
-            highest_delta = max(deltas, key=lambda x: x[1])
-            lowest_delta = min(deltas, key=lambda x: x[1])
-            highest_theta = max(thetas, key=lambda x: x[1])
-            lowest_theta = min(thetas, key=lambda x: x[1])
+            if deltas and thetas:
+                highest_delta = max(deltas, key=lambda x: x[1])
+                lowest_delta = min(deltas, key=lambda x: x[1])
+                highest_theta = max(thetas, key=lambda x: x[1])
+                lowest_theta = min(thetas, key=lambda x: x[1])
 
-            print(f"Expiration Date: {call_key}")
-            print(f"  Highest Delta: Strike = {highest_delta[0]}, Delta = {highest_delta[1]}")
-            print(f"  Lowest Delta: Strike = {lowest_delta[0]}, Delta = {lowest_delta[1]}")
-            print(f"  Highest Theta: Strike = {highest_theta[0]}, Theta = {highest_theta[1]}")
-            print(f"  Lowest Theta: Strike = {lowest_theta[0]}, Theta = {lowest_theta[1]}")
-            print("--------------------------------------------------")
+                print(f"Expiration Date: {exp_date}")
+                print(f"  Highest Delta: Strike = {highest_delta[0]}, Delta = {highest_delta[1]}")
+                print(f"  Lowest Delta: Strike = {lowest_delta[0]}, Delta = {lowest_delta[1]}")
+                print(f"  Highest Theta: Strike = {highest_theta[0]}, Theta = {highest_theta[1]}")
+                print(f"  Lowest Theta: Strike = {lowest_theta[0]}, Theta = {lowest_theta[1]}")
+                print("--------------------------------------------------")
 
-def print_itm_otm_analysis(options_chain, exp_dates, underlying_price):
+
+def print_itm_otm_analysis(options_chain, exp_dates=None, underlying_price=None):
     call_exp_map = options_chain.get('callExpDateMap', {})
     put_exp_map = options_chain.get('putExpDateMap', {})
 
-    # Extract available expiration dates
-    available_call_dates = list(call_exp_map.keys())
-    available_put_dates = list(put_exp_map.keys())
-
-    # Create a mapping from stripped dates to full dates
-    stripped_call_dates = {date.split(':')[0]: date for date in available_call_dates}
-    stripped_put_dates = {date.split(':')[0]: date for date in available_put_dates}
+    # Default to all available expiration dates if none are provided
+    if exp_dates is None:
+        exp_dates = list(call_exp_map.keys())
 
     for exp_date in exp_dates:
-        stripped_exp_date = exp_date.split(':')[0]
-        call_key = stripped_call_dates.get(stripped_exp_date)
-        put_key = stripped_put_dates.get(stripped_exp_date)
+        call_key = call_exp_map.get(exp_date)
+        put_key = put_exp_map.get(exp_date)
 
         if call_key and put_key:
-            print(f"Expiration Date: {call_key}")
+            print(f"Expiration Date: {exp_date}")
             print("In-the-Money (ITM) Options:")
-            for strike in call_exp_map[call_key].keys():
+            for strike in call_key.keys():
                 if float(strike) < underlying_price:
                     print(f"  Call Strike: {strike} is ITM")
 
             print("Out-of-the-Money (OTM) Options:")
-            for strike in call_exp_map[call_key].keys():
+            for strike in call_key.keys():
                 if float(strike) > underlying_price:
                     print(f"  Call Strike: {strike} is OTM")
             print("--------------------------------------------------")
+
 
 def get_expiration_chain(client, symbol):
     return client.option_expiration_chain(symbol).json()
@@ -325,7 +378,7 @@ def get_movers(client, index, sort=None):
     """
     return client.movers(index, sort).json()
 
-def print_market_moves(market_data):
+def print_market_movers(market_data):
     # Extract the screeners list from the provided data
     screeners = market_data.get('screeners', [])
 
@@ -479,6 +532,149 @@ def print_market_hours(market_data):
                     print(f"    End: {time['end']}")
             print("-" * 50)
         print("=" * 50)
+
+def start_equity_stream(client, symbol_list=None, field_list = None, handler=None):
+    stream_name = client.stream
+    if handler is None:
+        stream_name.start()
+    else:
+        stream_name.start(handler)
+
+    if symbol_list is not None:
+        # turn sybmol list into a comma separated string
+        symbols = ','.join(symbol_list)
+    else:
+        symbols = 'SPY'  # default to SPY
+
+    if field_list is not None:
+        fields = ','.join(map(str, field_list))
+    else:
+        fields = "0, 3"   # default to symbol and last price
+
+    stream_name.send(stream_name.level_one_equities(symbols, fields))
+
+    return stream_name
+
+def start_futures_stream(client, symbol_list=None, field_list = None, handler=None):
+    stream_name = client.stream
+    if handler is None:
+        stream_name.start()
+    else:
+        stream_name.start(handler)
+
+    if symbol_list is not None:
+        # turn sybmol list into a comma separated string
+        symbols = ','.join(symbol_list)
+    else:
+        symbols = '/ES'  # default to /ES
+
+    if field_list is not None:
+        fields = ','.join(map(str, field_list))
+    else:
+        fields = "0, 4"   # default to symbol and last price
+
+    stream_name.send(stream_name.level_one_futures(symbols, fields))
+
+    return stream_name
+
+def start_options_stream(client, option_list, field_list = None, handler=None):
+    stream_name = client.stream
+    if handler is None:
+        stream_name.start()
+    else:
+        stream_name.start(handler)
+
+    if option_list is not None:
+        # turn option list into a comma separated string
+        symbols = ','.join(option_list)
+
+    if field_list is not None:
+        fields = ','.join(map(str, field_list))
+    else:
+        fields = "0, 4"   # default to symbol and last price
+
+    stream_name.send(stream_name.level_one_options(symbols, fields))
+
+    return stream_name
+
+def add_to_stream(stream_name, symbol_list, field_list=None, stream_type='equities'):
+
+    if field_list is not None:
+        fields = ','.join(map(str, field_list))
+    else:
+        if stream_type == 'equities':
+            fields = "0, 3"     # default to symbol and last price
+        elif stream_type == 'futures' or stream_type == 'options':
+            fields = "0, 4"  # default to symbol and last price
+        elif stream_type == 'chart_equity':
+            fields = "0, 1, 2, 3, 4, 5, 6, 7, 8"
+
+    symbols = ','.join(symbol_list)
+
+    if stream_type == 'equities':
+        stream_name.send(stream_name.level_one_equities(symbols, fields, command="ADD"))
+    elif stream_type == 'futures':
+        stream_name.send(stream_name.level_one_futures(symbols, fields, command="ADD"))
+    elif stream_type == 'options':
+        stream_name.send(stream_name.level_one_options(symbols, fields, command="ADD"))
+    elif stream_type == 'chart_equity':
+        stream_name.send(stream_name.chart_equity(symbols, fields, command="ADD"))
+    else:
+        print("Invalid stream type")
+
+def substitute_stream(stream_name, symbol_list, field_list=None, stream_type='equities'):
+
+    if field_list is not None:
+        fields = ','.join(map(str, field_list))
+    else:
+        if stream_type == 'equities':
+            fields = "0, 3"  # default to symbol and last price
+        elif stream_type == 'futures' or stream_type == 'options':
+            fields = "0, 4"  # default to symbol and last price
+        elif stream_type == 'chart_equity':
+            fields = "0, 1, 2, 3, 4, 5, 6, 7, 8"
+
+    symbols = ','.join(symbol_list)
+
+    if stream_type == 'equities':
+        stream_name.send(stream_name.level_one_equities(symbols, fields, command="SUBS"))
+    elif stream_type == 'futures':
+        stream_name.send(stream_name.level_one_futures(symbols, fields, command="SUBS"))
+    elif stream_type == 'options':
+        stream_name.send(stream_name.level_one_options(symbols, fields, command="SUBS"))
+    elif stream_type == 'chart_equity':
+        stream_name.send(stream_name.chart_equity(symbols, fields, command="SUBS"))
+    else:
+        print("Invalid stream type")
+
+def start_chart_equity_stream(client, symbol_list, field_list=[0,1,2,3,4,5,6,7,8], handler=None):
+    stream_name = client.stream
+    if handler is None:
+        stream_name.start()
+    else:
+        stream_name.start(handler)
+
+    # turn symbol list into a comma separated string
+    symbols = ','.join(symbol_list)
+
+    fields = ','.join(map(str, field_list))
+
+    stream_name.send(stream_name.chart_equity(symbols, fields))
+
+    return stream_name
+
+def stop_stream(stream_name, clear_subscriptions=True):
+
+    if clear_subscriptions:
+        stream_name.stop()
+    else:
+        stream_name.stop(clear_subscriptions=False)
+
+
+
+
+
+
 
 
 
