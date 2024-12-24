@@ -298,7 +298,8 @@ def print_itm_otm_analysis(options_chain, exp_dates=None, underlying_price=None)
 def get_expiration_chain(client, symbol):
     return client.option_expiration_chain(symbol).json()
 
-def get_price_history(client, symbol, periodType, period=None, frequencyType=None, frequency=None):
+def get_price_history(client, symbol, periodType, period=None, frequencyType=None, frequency=None, startDate=None, endDate=None,
+                      needExtendedHoursData=True, needPreviousClose=True):
     """
 
     periodType: The time span for the data, such as day, month, year.
@@ -306,7 +307,8 @@ def get_price_history(client, symbol, periodType, period=None, frequencyType=Non
 
     """
 
-    return client.price_history(symbol, periodType, period, frequencyType, frequency).json()
+    return client.price_history(symbol, periodType, period, frequencyType, frequency, startDate,endDate,
+                                needExtendedHoursData, needPreviousClose).json()
 
 
 def convert_timestamp(timestamp):
